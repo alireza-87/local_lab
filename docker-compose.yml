@@ -1,0 +1,133 @@
+version: '3'
+services:
+  # **************** jupyter ****************
+  jupyter:
+    image: quay.io/jupyter/datascience-notebook:2024-08-30
+    container_name: jupyter
+    volumes:
+      - ./work:/home/jovyan/work
+    expose:
+      - 8888
+    environment:
+      - JUPYTER_TOKEN=${HOMELAB_JP_TOKEN}
+    command: start-notebook.sh --NotebookApp.token=${HOMELAB_JP_TOKEN}
+    networks:
+      - jupyter_network
+
+  # **************** nginx ****************
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    depends_on:
+      - jupyter
+    ports:
+      - 10001:80 
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./htpasswd:/etc/nginx/.htpasswd:ro
+    networks:
+      - jupyter_network
+
+  # **************** registry ****************
+  registry:
+    image: registry:2
+    container_name: registry
+    ports:
+      - "5000:5000"
+    environment:
+      - REGISTRY_AUTH=htpasswd
+      - REGISTRY_AUTH_HTPASSWD_REALM="Registry Realm"
+      - REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd
+      - REGISTRY_HTTP_HEADERS_Access-Control-Allow-Origin=['http://<YOUR_IP>:8081']
+      - REGISTRY_HTTP_HEADERS_Access-Control-Allow-Methods=['HEAD', 'GET', 'OPTIONS', 'DELETE']
+      - REGISTRY_HTTP_HEADERS_Access-Control-Allow-Headers=['Authorization', 'Accept', 'Cache-Control']
+      - REGISTRY_HTTP_HEADERS_Access-Control-Max-Age=['1728000']
+      - REGISTRY_HTTP_HEADERS_Access-Control-Allow-Credentials=['true']
+
+    volumes:
+      - ./auth:/auth
+      - ./registry-data:/var/lib/registry
+    networks:
+      - jupyter_network
+
+  # **************** registry-ui ****************
+  registry-ui:
+    image: joxit/docker-registry-ui:latest
+    container_name: registry-ui
+    ports:
+      - "8081:80"
+    environment:
+      - REGISTRY_TITLE=Docker Registry
+      - NGINX_PROXY_PASS_URL=http://registry:5000
+      - DELETE_IMAGES=true
+      - SINGLE_REGISTRY=true
+    depends_on:
+      - registry
+    networks:
+      - jupyter_network
+
+  # **************** vscode ****************
+  vscode:
+    image: codercom/code-server:latest
+    container_name: vscode
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./vscode:/home/coder/project
+      - <DIR>:<DIR>
+    environment:
+      - PASSWORD=${HOMELAB_VSCODE_PASS}
+      - SUDO_PASSWORD=${HOMELAB_VSCODE_PASS_SUDO}
+    networks:
+      - jupyter_network
+
+# **************** MongoDB ****************
+  mongodb:
+    image: mongo:latest
+    #container_name: mongodb_pipline
+    ports:
+      - "8084:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${HOMELAB_MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${HOMELAB_MONGO_USER_PASSWORD}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - homelab_mongodb_volume:/data/db
+    networks:
+      - jupyter_network
+
+# ************** selenium grid **************
+  selenium-grid:
+    image: seleniarm/standalone-chromium:latest
+    ports:
+      - "8083:4444"
+    environment:
+      SE_NODE_MAX_SESSIONS: 100
+      SE_NODE_OVERRIDE_MAX_SESSIONS: "true"
+      SE_NODE_SESSION_TIMEOUT: 1000
+      PYTHONUNBUFFERED: 1
+    shm_size: 4g
+    volumes:
+      - /dev/shm:/dev/shm
+    networks:
+      - jupyter_network
+    deploy:
+      resources:
+        limits:
+          cpus: '16'
+          memory: 32G
+        reservations:
+          cpus: '4'
+          memory: 8G
+
+networks:
+  jupyter_network:
+    driver: bridge
+
+volumes:
+  homelab_mongodb_volume:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: ${HOMELAB_VOLUME_MONGO}
